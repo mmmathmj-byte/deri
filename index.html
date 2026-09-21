@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>도함수 디펜스 게임</title>
+  <script src="https://polyfill.io/v3/polyfill.min.js?features=es6"></script>
+  <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; }
+    body {
+      background: #0f172a;
+      color: #fff;
+      font-family: 'Pretendard', sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      overflow: hidden;
+    }
+    #game-container {
+      position: relative;
+      width: 480px;
+      height: 640px;
+      background: radial-gradient(circle, #1e293b 0%, #0f172a 100%);
+      border: 3px solid #38bdf8;
+      border-radius: 16px;
+      box-shadow: 0 0 20px rgba(56, 189, 248, 0.3);
+      overflow: hidden;
+    }
+    .hud {
+      position: absolute;
+      top: 16px;
+      left: 16px;
+      right: 16px;
+      display: flex;
+      justify-content: space-between;
+      font-size: 18px;
+      font-weight: bold;
+      z-index: 10;
+    }
+    .meteor {
+      position: absolute;
+      width: 120px;
+      height: 120px;
+      background: linear-gradient(135deg, #f97316, #ea580c);
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #fff;
+      font-size: 18px;
+      cursor: grab;
+      box-shadow: 0 0 15px rgba(249, 115, 22, 0.6);
+      transition: transform 0.1s ease;
+      touch-action: none;
+      z-index: 5;
+    }
+    .meteor:active { cursor: grabbing; transform: scale(1.1); }
+    .targets-container {
+      position: absolute;
+      bottom: 20px;
+      left: 0;
+      width: 100%;
+      display: flex;
+      justify-content: space-around;
+      padding: 0 10px;
+    }
+    .target-zone {
+      width: 130px;
+      height: 90px;
+      background: #1e293b;
+      border: 2px dashed #38bdf8;
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 16px;
+      transition: all 0.2s;
+    }
+    .target-zone.highlight {
+      background: #334155;
+      border-color: #4ade80;
+      transform: scale(1.05);
+    }
+    .game-over-screen {
+      position: absolute;
+      inset: 0;
+      background: rgba(15, 23, 42, 0.9);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      z-index: 20;
+    }
+    .btn {
+      margin-top: 20px;
+      padding: 10px 24px;
+      background: #38bdf8;
+      color: #0f172a;
+      font-weight: bold;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 16px;
+    }
+  </style>
+</head>
+<body>
+
+<div id="game-container">
+  <div class="hud">
+    <div>점수: <span id="score">0</span></div>
+    <div>콤보: <span id="combo">0</span></div>
+  </div>
+
+  <div id="meteor" class="meteor"></div>
+
+  <div class="targets-container">
+    <div class="target-zone" data-index="0"></div>
+    <div class="target-zone" data-index="1"></div>
+    <div class="target-zone" data-index="2"></div>
+  </div>
+
+  <div id="game-over" class="game-over-screen" style="display: none;">
+    <h2>게임 종료!</h2>
+    <p style="margin-top: 10px;">최종 점수: <span id="final-score">0</span></p>
+    <button class="btn" onclick="startGame()">다시 시작</button>
+  </div>
+</div>
+
+<script>
+  const problemBank = [
+    { f: "x^3", ans: "3x^2", wrong: ["2x^3", "3x"] },
+    { f: "2x^4", ans: "8x^3", wrong: ["6x^3", "8x^4"] },
+    { f: "5x^2 - 3x", ans: "10x - 3", wrong: ["10x", "5x - 3"] },
+    { f: "x^2 + 4x + 1", ans: "2x + 4", wrong: ["2x + 1", "x + 4"] },
+    { f: "-x^3 + 6x", ans: "-3x^2 + 6", wrong: ["3x^2 + 6", "-3x + 6"] },
+    { f: "4x^3 - 2x^2", ans: "12x^2 - 4x", wrong: ["12x^2 - 2x", "8x^2 - 4x"] }
+  ];
+
+  let score = 0;
+  let combo = 0;
+  let currentProblem = null;
+  let meteorY = 60;
+  let dropSpeed = 0.8;
+  let animationId = null;
+  let isDragging = false;
+  let dragOffsetX = 0;
+  let dragOffsetY = 0;
+
+  const meteorEl = document.getElementById('meteor');
+  const targetEls = document.querySelectorAll('.target-zone');
+  const scoreEl = document.getElementById('score');
+  const comboEl = document.getElementById('combo');
+
+  function getRandomProblem() {
+    const p = problemBank[Math.floor(Math.random() * problemBank.length)];
+    const choices = [p.ans, ...p.wrong].sort(() => Math.random() - 0.5);
+    return { ...p, choices };
+  }
+
+  function renderProblem() {
+    currentProblem = getRandomProblem();
+    meteorY = 60;
+    meteorEl.style.left = '180px';
+    meteorEl.style.top = `${meteorY}px`;
+    meteorEl.innerHTML = `\\(${currentProblem.f}\\)`;
+
+    targetEls.forEach((el, idx) => {
+      el.innerHTML = `\\(${currentProblem.choices[idx]}\\)`;
+    });
+
+    if (window.MathJax) {
+      MathJax.typesetPromise();
+    }
+  }
+
+  function update() {
+    if (!isDragging) {
+      meteorY += dropSpeed;
+      meteorEl.style.top = `${meteorY}px`;
+
+      if (meteorY > 480) {
+        handleWrong();
+      }
+    }
+    animationId = requestAnimationFrame(update);
+  }
+
+  // Touch & Mouse Drag Handlers
+  function onPointerDown(e) {
+    isDragging = true;
+    const rect = meteorEl.getBoundingClientRect();
+    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+    const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+    dragOffsetX = clientX - rect.left;
+    dragOffsetY = clientY - rect.top;
+  }
+
+  function onPointerMove(e) {
+    if (!isDragging) return;
+    const containerRect = document.getElementById('game-container').getBoundingClientRect();
+    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+    const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+
+    let x = clientX - containerRect.left - dragOffsetX;
+    let y = clientY - containerRect.top - dragOffsetY;
+
+    meteorEl.style.left = `${x}px`;
+    meteorEl.style.top = `${y}px`;
+
+    // Highlight target on hover
+    targetEls.forEach(target => {
+      const tRect = target.getBoundingClientRect();
+      const mRect = meteorEl.getBoundingClientRect();
+      if (isOverlap(mRect, tRect)) {
+        target.classList.add('highlight');
+      } else {
+        target.classList.remove('highlight');
+      }
+    });
+  }
+
+  function onPointerUp(e) {
+    if (!isDragging) return;
+    isDragging = false;
+
+    let selectedIdx = -1;
+    const mRect = meteorEl.getBoundingClientRect();
+
+    targetEls.forEach((target, idx) => {
+      target.classList.remove('highlight');
+      if (isOverlap(mRect, target.getBoundingClientRect())) {
+        selectedIdx = idx;
+      }
+    });
+
+    if (selectedIdx !== -1) {
+      const selectedChoice = currentProblem.choices[selectedIdx];
+      if (selectedChoice === currentProblem.ans) {
+        handleCorrect();
+      } else {
+        handleWrong();
+      }
+    }
+  }
+
+  function isOverlap(r1, r2) {
+    return !(r1.right < r2.left || r1.left > r2.right || r1.bottom < r2.top || r1.top > r2.bottom);
+  }
+
+  function handleCorrect() {
+    combo += 1;
+    score += 100 + (combo * 20);
+    scoreEl.innerText = score;
+    comboEl.innerText = combo;
+    dropSpeed += 0.05; // 난이도 상승
+    renderProblem();
+  }
+
+  function handleWrong() {
+    combo = 0;
+    comboEl.innerText = combo;
+    renderProblem();
+  }
+
+  function startGame() {
+    score = 0;
+    combo = 0;
+    dropSpeed = 0.8;
+    scoreEl.innerText = score;
+    comboEl.innerText = combo;
+    document.getElementById('game-over').style.display = 'none';
+    renderProblem();
+    if (animationId) cancelAnimationFrame(animationId);
+    animationId = requestAnimationFrame(update);
+  }
+
+  meteorEl.addEventListener('mousedown', onPointerDown);
+  meteorEl.addEventListener('touchstart', onPointerDown);
+  window.addEventListener('mousemove', onPointerMove);
+  window.addEventListener('touchmove', onPointerMove);
+  window.addEventListener('mouseup', onPointerUp);
+  window.addEventListener('touchend', onPointerUp);
+
+  startGame();
+</script>
+</body>
+</html>
